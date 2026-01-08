@@ -1,0 +1,1 @@
+Put build of this source in the root `sai2.exe` directory with `s2ce.dll` provided by [s2cedll](https://github.com/supchyan/s2cedll) repo. Launch injector executable to start sai2 with modified theme.
