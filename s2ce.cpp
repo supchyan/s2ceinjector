@@ -1,8 +1,18 @@
 #include <Windows.h>
 #include <TlHelp32.h>
 #include <stdio.h>
+#include <fstream>
 
-DWORD GetProcessByName(const char* procName)
+inline bool exists(const std::string& name) {
+    struct stat buffer;
+    return (stat(name.c_str(), &buffer) == 0);
+}
+
+void printExitMessage() {
+    printf("\nPress ENTER to exit...\n");
+    getchar();
+}
+DWORD getProcessByName(const char* procName)
 {
     char _procName[255];
 
@@ -50,6 +60,21 @@ int main(const int argc, char* argv[])
 
     printf("S2CE ver. 2.0\n\n");
 
+    const DWORD fullPathResult = GetFullPathNameA(dllName, MAX_PATH, fullDLLPath, nullptr);
+    if (fullPathResult == 0)
+    {
+        printf("[ERR] Cannot invoke GetFullPathNameA.\n");
+        printExitMessage();
+        return -1;
+    }
+
+    if (!exists(fullDLLPath)) {
+        printf("[ERR] Cannot find <%s>. Check if <%s> is in sa2's root directory.\n", dllName, dllName);
+        printExitMessage();
+        return -1;
+    }
+        
+
     if (!CreateProcess(
         NULL,                   // Module name
         lpwProcName,            // Command line
@@ -63,13 +88,14 @@ int main(const int argc, char* argv[])
         &procInfo)              // Pointer to PROCESS_INFORMATION structure
         )
     {
-        printf("[ERR] Cannot run %s\n", procName);
+        printf("[ERR] Cannot run <%s>. Check if this executable is in sai2's root directory.\n", procName);
+        printExitMessage();
         return -1;
     }
 
     printf("[OK] %s started\n", procName);
 
-    const DWORD pid = GetProcessByName(procName);
+    const DWORD pid = getProcessByName(procName);
 
     if (pid == (DWORD)-1) {
         return -1;
@@ -77,17 +103,11 @@ int main(const int argc, char* argv[])
 
     printf("[>>] PID: %i\n\n", (int)pid);
 
-    const DWORD dwFullPathResult = GetFullPathNameA(dllName, MAX_PATH, fullDLLPath, nullptr);
-    if (dwFullPathResult == 0)
-    {
-        printf("[ERR] Wrong DLL\n");
-        return -1;
-    }
-
     const HANDLE hTargetProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
     if (hTargetProcess == INVALID_HANDLE_VALUE)
     {
         printf("[ERR] Cannot handle sai2.exe\n");
+        printExitMessage();
         return -1;
     }
 
@@ -97,6 +117,7 @@ int main(const int argc, char* argv[])
     if (pathAddr == nullptr)
     {
         printf("[ERR] Cannot allocate memory in hProc.\n");
+        printExitMessage();
         return -1;
     }
 
@@ -106,6 +127,7 @@ int main(const int argc, char* argv[])
     if (writeMemRes == 0)
     {
         printf("[ERR] Cannot write DLL path into hProc.\n");
+        printExitMessage();
         return -1;
     }
 
@@ -119,6 +141,7 @@ int main(const int argc, char* argv[])
     if (funcAddr == nullptr)
     {
         printf("[ERR] Cannot get \"LoadLibraryA\" address.\n");
+        printExitMessage();
         return -1;
     }
 
@@ -128,6 +151,7 @@ int main(const int argc, char* argv[])
     if (hThreadCreationResult == INVALID_HANDLE_VALUE)
     {
         printf("[ERR] Cannot create the thread in the process.\n");
+        printExitMessage();
         return -1;
     }
 
