@@ -1,165 +1,111 @@
-#include <Windows.h>
-#include <TlHelp32.h>
-#include <stdio.h>
-#include <fstream>
+#include "helper.h"
 
-inline bool exists(const std::string& name) {
-    struct stat buffer;
-    return (stat(name.c_str(), &buffer) == 0);
-}
+LPCSTR dll_name  = "s2ce.dll"; // dll to be injected
+LPCSTR proc_name = "sai2.exe"; // process to inject to
 
-void printExitMessage() {
-    printf("\nPress ENTER to exit...\n");
-    getchar();
-}
-DWORD getProcessByName(const char* procName)
+STARTUPINFO         start_info  { 0 };
+PROCESS_INFORMATION proc_info   { 0 };
+
+int main()
 {
-    char _procName[255];
+    // convert LPCSTR to LPWSTR
+    wchar_t w_name[16] { 0 };
+    mbstowcs(w_name, proc_name, strlen(proc_name) + 1);
+    LPWSTR lpw_name = w_name;
 
-    PROCESSENTRY32 ProcList{};
-    ProcList.dwSize = sizeof(ProcList);
+    char full_dll_path[MAX_PATH] { 0 };
 
-    const HANDLE hProcList = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hProcList == INVALID_HANDLE_VALUE)
-        return -1;
+    ZeroMemory(&proc_info,  sizeof(proc_info) );
+    ZeroMemory(&start_info, sizeof(start_info));
 
-    if (!Process32First(hProcList, &ProcList))
-        return -1;
+    start_info.cb = sizeof(start_info);
 
-    wcstombs_s(nullptr, _procName, ProcList.szExeFile, 255);
+    printf("S2CE CLI\n\n");
 
-    if (lstrcmpA(_procName, procName) == 0)
-        return ProcList.th32ProcessID;
+    const DWORD full_dll_path_result = GetFullPathNameA(dll_name, MAX_PATH, full_dll_path, nullptr);
 
-    while (Process32Next(hProcList, &ProcList))
-    {
-        wcstombs_s(nullptr, _procName, ProcList.szExeFile, 255);
-
-        if (lstrcmpA(_procName, procName) == 0)
-            return ProcList.th32ProcessID;
+    if (full_dll_path_result == 0) { // shouldn't be invoked, but ok
+        printf("[E] cannot get full <%s> path\n", dll_name);
+        print_exit_msg();
+        return 0;
     }
 
-    return -1;
-}
-
-int main(const int argc, char* argv[])
-{
-    LPCSTR dllName  = "s2ce.dll";
-    LPCSTR procName = "sai2.exe";
-    wchar_t wProcName[20];
-    mbstowcs(wProcName, procName, strlen(procName) + 1);//Plus null
-    LPWSTR lpwProcName = wProcName;
-    char fullDLLPath[MAX_PATH];
-
-    STARTUPINFO startInfo = { sizeof(startInfo) };
-    PROCESS_INFORMATION procInfo;
-
-    ZeroMemory(&startInfo, sizeof(startInfo));
-    startInfo.cb = sizeof(startInfo);
-    ZeroMemory(&procInfo, sizeof(procInfo));
-
-    printf("S2CE ver. 2.0\n\n");
-
-    const DWORD fullPathResult = GetFullPathNameA(dllName, MAX_PATH, fullDLLPath, nullptr);
-    if (fullPathResult == 0)
-    {
-        printf("[ERR] Cannot invoke GetFullPathNameA.\n");
-        printExitMessage();
-        return -1;
+    if (!exists(full_dll_path)) { // handle if cannot find `s2ce.dll`
+        printf("[E] cannot find <%s>\n", dll_name);
+        print_exit_msg();
+        return 0;
     }
 
-    if (!exists(fullDLLPath)) {
-        printf("[ERR] Cannot find <%s>. Check if <%s> is in sa2's root directory.\n", dllName, dllName);
-        printExitMessage();
-        return -1;
-    }
-        
-
-    if (!CreateProcess(
-        NULL,                   // Module name
-        lpwProcName,            // Command line
-        NULL,                   // Process handle not inheritable
-        NULL,                   // Thread handle not inheritable
-        TRUE,                   // Handle inheritance
-        0,                      // Creation flags
-        NULL,                   // Use parent's environment block
-        NULL,                   // Use parent's starting directory 
-        &startInfo,             // Pointer to STARTUPINFO structure
-        &procInfo)              // Pointer to PROCESS_INFORMATION structure
-        )
-    {
-        printf("[ERR] Cannot run <%s>. Check if this executable is in sai2's root directory.\n", procName);
-        printExitMessage();
-        return -1;
+    if (!CreateProcessW(NULL, lpw_name, NULL, NULL, 1, 0, NULL, NULL, &start_info, &proc_info)) { // handle if cannot run `sai2.exe`
+        printf("[E] cannot run <%s>. Does file exist?\n", proc_name);
+        print_exit_msg();
+        return 0;
     }
 
-    printf("[OK] %s started\n", procName);
+    printf("[0] <%s> started\n", proc_name); 
 
-    const DWORD pid = getProcessByName(procName);
+    const DWORD pid = get_pid_by_name(proc_name);
 
-    if (pid == (DWORD)-1) {
-        return -1;
+    if (pid == (DWORD)-1) { // proc isn't runnning
+        return 0;
     }
 
-    printf("[>>] PID: %i\n\n", (int)pid);
+    printf("[0] pid: %i\n\n", (int)pid);
 
-    const HANDLE hTargetProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-    if (hTargetProcess == INVALID_HANDLE_VALUE)
-    {
-        printf("[ERR] Cannot handle sai2.exe\n");
-        printExitMessage();
-        return -1;
+    const HANDLE h_target_proc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    if (h_target_proc == INVALID_HANDLE_VALUE) {
+        printf("[E] cannot handle <%s>\n", proc_name);
+        print_exit_msg();
+        return 0;
     }
 
-    printf("[OK] DLL injected\n");
-
-    const LPVOID pathAddr = VirtualAllocEx(hTargetProcess, nullptr, lstrlenA(fullDLLPath) + 1, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (pathAddr == nullptr)
-    {
-        printf("[ERR] Cannot allocate memory in hProc.\n");
-        printExitMessage();
-        return -1;
+    const LPVOID path_addr = VirtualAllocEx(h_target_proc, nullptr, lstrlenA(full_dll_path) + 1, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (path_addr == nullptr) {
+        printf("[E] cannot allocate memory for dll path\n");
+        print_exit_msg();
+        return 0;
     }
 
-    printf("[OK] Memory allocated at 0x%X\n", (UINT)(uintptr_t)pathAddr);
+    printf("[0] dll path address: 0x%X\n", (UINT)(uintptr_t)path_addr);
 
-    const DWORD writeMemRes = WriteProcessMemory(hTargetProcess, pathAddr, fullDLLPath, static_cast<SIZE_T>(lstrlenA(fullDLLPath)) + 1, nullptr);
-    if (writeMemRes == 0)
-    {
-        printf("[ERR] Cannot write DLL path into hProc.\n");
-        printExitMessage();
-        return -1;
+    const DWORD wm_result = WriteProcessMemory(h_target_proc, path_addr, full_dll_path, static_cast<SIZE_T>(lstrlenA(full_dll_path)) + 1, nullptr);
+    if (wm_result == 0) {
+        printf("[E] cannot write dll path into a process\n");
+        print_exit_msg();
+        return 0;
     }
 
-    printf("[OK] DLL path written\n");
+    printf("[0] dll injected\n");
 
-    const HMODULE hModule = GetModuleHandleA("kernel32.dll");
-    if (hModule == INVALID_HANDLE_VALUE || hModule == nullptr)
-        return -1;
-
-    const FARPROC funcAddr = GetProcAddress(hModule, "LoadLibraryA");
-    if (funcAddr == nullptr)
-    {
-        printf("[ERR] Cannot get \"LoadLibraryA\" address.\n");
-        printExitMessage();
-        return -1;
+    const HMODULE h_module = GetModuleHandleA("kernel32.dll");
+    if (h_module == INVALID_HANDLE_VALUE || h_module == nullptr) {
+        return 0;
     }
 
-    printf("[OK] LoadLibraryA address at 0x%X\n", (UINT)(uintptr_t)funcAddr);
-
-    const HANDLE hThreadCreationResult = CreateRemoteThread(hTargetProcess, nullptr, 0, (LPTHREAD_START_ROUTINE)funcAddr, pathAddr, 0, nullptr);
-    if (hThreadCreationResult == INVALID_HANDLE_VALUE)
-    {
-        printf("[ERR] Cannot create the thread in the process.\n");
-        printExitMessage();
-        return -1;
+    const FARPROC func_addr = GetProcAddress(h_module, "LoadLibraryA");
+    if (func_addr == nullptr) {
+        printf("[E] cannot get \"LoadLibraryA\" address\n");
+        print_exit_msg();
+        return 0;
     }
 
-    printf("[OK] Done\n");
+    printf("[0] \"LoadLibraryA\" address: 0x%X\n", (UINT)(uintptr_t)func_addr);
 
-    WaitForSingleObject(procInfo.hProcess, INFINITE);
-    CloseHandle(procInfo.hProcess);
-    CloseHandle(procInfo.hThread);
+    const HANDLE hThreadCreationResult = CreateRemoteThread(h_target_proc, nullptr, 0, (LPTHREAD_START_ROUTINE)func_addr, path_addr, 0, nullptr);
+    if (hThreadCreationResult == INVALID_HANDLE_VALUE) {
+        printf("[E] cannot create remote thread\n");
+        print_exit_msg();
+        return 0;
+    }
+
+    printf("[0] injection separated into a remote thread\n");
+
+    // wait 1 ms to let a proc open
+    WaitForSingleObject(proc_info.hProcess, 1);
+
+    // close handlers
+    CloseHandle(proc_info.hProcess);
+    CloseHandle(proc_info.hThread);
 
     return 0;
 }
